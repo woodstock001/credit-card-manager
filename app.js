@@ -771,6 +771,32 @@ async function restore(d) {
 }
 
 /* ============ 启动 ============ */
+
+function bindAuth() {
+  var bl = $('#btnLogin'), bs = $('#btnSignup');
+  if (!bl || bl._bound) return;
+  bl._bound = true; bs._bound = true;
+  bl.onclick = async function () {
+    var email = $('#authEmail').value.trim(), pass = $('#authPass').value;
+    if (!email || !pass) { authMsg('请填邮箱和密码'); return; }
+    bl.textContent = '登录中…'; bl.disabled = true;
+    try { await signIn(email, pass); await startApp(); }
+    catch (e) { authMsg(e.message); }
+    finally { bl.textContent = '登录'; bl.disabled = false; }
+  };
+  bs.onclick = async function () {
+    var email = $('#authEmail').value.trim(), pass = $('#authPass').value;
+    if (!email || !pass || pass.length < 6) { authMsg('请填邮箱和至少 6 位密码'); return; }
+    bs.textContent = '处理中…'; bs.disabled = true;
+    try {
+      var logged = await signUp(email, pass);
+      if (logged) { await startApp(); }
+      else { authMsg('注册成功！请去邮箱点确认链接，然后回来点登录', true); }
+    } catch (e) { authMsg(e.message); }
+    finally { bs.textContent = '第一次用，注册账号'; bs.disabled = false; }
+  };
+}
+
 function showAuth() {
   $('#authView').classList.remove('hidden');
   $('#appView').classList.add('hidden');
@@ -786,28 +812,13 @@ function authMsg(text, ok) {
 }
 async function boot() {
   loadSession();
+  bindAuth();
   if (!BASE || !ANON || BASE.indexOf('__') === 0) {
     showAuth();
     authMsg('还没配置数据库，请先填 config.js');
     return;
   }
   if (!SESSION) { showAuth(); return; }
-
-  $('#btnLogin').onclick = async function () {
-    var email = $('#authEmail').value.trim(), pass = $('#authPass').value;
-    if (!email || !pass) { authMsg('请填邮箱和密码'); return; }
-    try { await signIn(email, pass); await startApp(); }
-    catch (e) { authMsg(e.message); }
-  };
-  $('#btnSignup').onclick = async function () {
-    var email = $('#authEmail').value.trim(), pass = $('#authPass').value;
-    if (!email || !pass || pass.length < 6) { authMsg('请填邮箱和至少 6 位密码'); return; }
-    try {
-      var logged = await signUp(email, pass);
-      if (logged) { await startApp(); }
-      else { authMsg('注册成功，请去邮箱点确认链接，然后回来登录', true); }
-    } catch (e) { authMsg(e.message); }
-  };
 
   try { await startApp(); }
   catch (e) {
