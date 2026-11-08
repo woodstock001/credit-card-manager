@@ -32,10 +32,28 @@ function toCents(v) {
   return isNaN(n) ? 0 : Math.round(n * 100);
 }
 function lastDay(y, m) { return new Date(y, m, 0).getDate(); }
-function dueDateOf(period, day) {
+/* 由账期 + 日号算具体日期
+ * 传了 billDay 就按信用卡规则处理跨月：
+ *   还款日 <= 账单日 → 落在次月（例：5 号账单日 / 1 号还款日 → 次月 1 号）
+ *   还款日 >  账单日 → 落在本月
+ */
+function dueDateOf(period, day, billDay) {
   var y = parseInt(period.slice(0, 4), 10), m = parseInt(period.slice(5, 7), 10);
-  var d = Math.min(parseInt(day, 10) || 1, lastDay(y, m));
+  var d = parseInt(day, 10) || 1;
+  var b = parseInt(billDay, 10) || 0;
+  if (b > 0 && d <= b) { m += 1; if (m > 12) { m = 1; y += 1; } }
+  d = Math.min(d, lastDay(y, m));
   return y + '-' + p2(m) + '-' + p2(d);
+}
+/* 还款日是否落在次月 */
+function dueNextMonth(billDay, dueDay) {
+  var b = parseInt(billDay, 10) || 5, d = parseInt(dueDay, 10) || 23;
+  return d <= b;
+}
+/* 还款日的文字描述：当月23日 / 次月1日 */
+function dueDayLabel(billDay, dueDay) {
+  var d = parseInt(dueDay, 10) || 23;
+  return (dueNextMonth(billDay, dueDay) ? '次月' : '当月') + d + '日';
 }
 function daysFromToday(dateStr) {
   if (!dateStr) return null;
@@ -156,7 +174,7 @@ function reminders() {
     var rem = billRemain(b);
     if (rem <= 0) return;
     var c = cardById(b.card_id);
-    var due = b.due_date || (b.period ? dueDateOf(b.period, (c && c.due_day) || 23) : null);
+    var due = b.due_date || (b.period ? dueDateOf(b.period, (c && c.due_day) || 23, (c && c.bill_day) || 5) : null);
     if (!due) return;
     var d = daysFromToday(due);
     if (d < -60) return;
@@ -220,7 +238,8 @@ function renderHome() {
   S.bills.forEach(function (b) {
     if (periodOf(b.period) === cur) { monthBill += b.amount_cents || 0; monthPaid += b.paid_cents || 0; }
     if (billRemain(b) > 0) {
-      var due = b.due_date || dueDateOf(b.period, (cardById(b.card_id) || {}).due_day || 23);
+      var c0 = cardById(b.card_id) || {};
+      var due = b.due_date || dueDateOf(b.period, c0.due_day || 23, c0.bill_day || 5);
       if (daysFromToday(due) < 0) overdue++;
     }
   });
@@ -291,12 +310,12 @@ function cardState(c) {
   var unpaid = bills.filter(function (b) { return billRemain(b) > 0; });
   if (unpaid.length) {
     unpaid.sort(function (a, b) {
-      var da = a.due_date || dueDateOf(a.period, dueDay);
-      var db = b.due_date || dueDateOf(b.period, dueDay);
+      var da = a.due_date || dueDateOf(a.period, dueDay, billDay);
+      var db = b.due_date || dueDateOf(b.period, dueDay, billDay);
       return da < db ? -1 : da > db ? 1 : 0;
     });
     var b0 = unpaid[0];
-    var due0 = b0.due_date || dueDateOf(b0.period, dueDay);
+    var due0 = b0.due_date || dueDateOf(b0.period, dueDay, billDay);
     return {
       type: 'unpaid', bill: b0, amount: billRemain(b0),
       label: (b0.paid_cents || 0) > 0 ? '剩余应还' : '本期账单',
@@ -511,7 +530,7 @@ function showGraceDetail() {
     ? rows.map(function (r) {
       var nm = (r.card.alias || r.card.bank) + (r.card.last4 ? ' ' + r.card.last4 : '');
       return '<div class="bar-row"><div class="lab"><span>' + esc(nm) +
-        '</span><span>' + r.g + ' 天 · ' + esc(r.card.bill_day) + ' 账单日 / ' + esc(r.card.due_day) + ' 还款日</span></div>' +
+        '</span><span>' + r.g + ' 天 · ' + esc(r.card.bill_day) + ' 日账单 / ' + esc(dueDayLabel(r.card.bill_day, r.card.due_day)) + '还款</span></div>' +
         '<div class="bar-track"><div class="bar-fill" style="width:' +
         Math.min(100, r.g / Math.max(1, rows[0].g) * 100).toFixed(1) + '%"></div></div></div>';
     }).join('')
@@ -576,7 +595,7 @@ function openMenu(id) {
         var cur = periodOf(todayISO());
         billForm(st.bill || {
           card_id: it.card.id, period: cur,
-          due_date: dueDateOf(cur, it.card.due_day || 23)
+          due_date: dueDateOf(cur, it.card.due_day || 23, it.card.bill_day || 5)
         });
       } else if (a === 'edit') {
         if (it.kind === 'card') cardForm(it.card); else fixedForm(it.fixed);
@@ -772,7 +791,7 @@ function renderSettings() {
     host.innerHTML = S.cards.map(function (c) {
       return '<div class="item"><div class="grow"><div class="t1">' + esc(c.alias || c.bank) + (c.is_active === false ? '<span class="tag gray">停用</span>' : '') + '</div>' +
         '<div class="t2">' + esc(c.bank) + (c.last4 ? ' · 尾号 ' + esc(c.last4) : '') +
-        ' · 额度 ¥' + fmt(c.credit_limit_cents) + ' · ' + esc(c.bill_day) + ' 账单日 / ' + esc(c.due_day) + ' 还款日</div></div>' +
+        ' · 额度 ¥' + fmt(c.credit_limit_cents) + ' · ' + esc(c.bill_day) + ' 日账单 / ' + esc(dueDayLabel(c.bill_day, c.due_day)) + '还款</div></div>' +
         '<button class="btn sm" data-card="' + esc(c.id) + '">编辑</button></div>';
     }).join('');
   }
@@ -857,7 +876,7 @@ function cardForm(c) {
     { key: 'last4', label: '卡号后四位', type: 'text', value: c.last4, placeholder: '1234' },
     { key: 'credit_limit', label: '信用额度（元）', type: 'money', value: c.credit_limit_cents ? (c.credit_limit_cents / 100) : '' },
     { key: 'bill_day', label: '账单日（每月几号）', type: 'number', value: c.bill_day || 5 },
-    { key: 'due_day', label: '还款日（每月几号）', type: 'number', value: c.due_day || 23 },
+    { key: 'due_day', label: '还款日（每月几号，小于账单日算次月）', type: 'number', value: c.due_day || 23 },
     { key: 'auto_pay', label: '自动还款', type: 'bool', value: !!c.auto_pay },
     { key: 'is_active', label: '启用', type: 'bool', value: c.is_active !== false }
   ];
@@ -883,6 +902,9 @@ function cardForm(c) {
 function billForm(b) {
   b = b || {};
   if (!S.cards.length) { toast('请先在设置里添加信用卡'); return; }
+  var dCard = cardById(b.card_id || S.cards[0].id) || S.cards[0];
+  var dPeriod = b.period || periodOf(todayISO());
+  var dDue = b.due_date || dueDateOf(dPeriod, dCard.due_day || 23, dCard.bill_day || 5);
   var fields = [
     {
       key: 'card_id', label: '信用卡', type: 'select', value: b.card_id || S.cards[0].id,
@@ -891,7 +913,7 @@ function billForm(b) {
     { key: 'period', label: '账期（YYYY-MM）', type: 'text', value: b.period || periodOf(todayISO()), placeholder: '2026-11' },
     { key: 'amount', label: '账单金额（元）', type: 'money', value: b.amount_cents ? (b.amount_cents / 100) : '' },
     { key: 'min', label: '最低还款（元）', type: 'money', value: b.min_cents ? (b.min_cents / 100) : '' },
-    { key: 'due_date', label: '到期还款日', type: 'date', value: b.due_date || '' },
+    { key: 'due_date', label: '到期还款日（自动算，可改）', type: 'date', value: dDue },
     { key: 'note', label: '备注', type: 'text', value: b.note || '' }
   ];
   openSheet(b.id ? '编辑账单' : '记一笔账单', fields, async function (v) {
@@ -909,6 +931,24 @@ function billForm(b) {
     }
     await loadAll(); render();
   }, b.id ? '<button type="button" class="btn danger block" id="delBill">删除这笔账单</button>' : '');
+
+  /* 到期日跟着「信用卡 + 账期」自动变，手动改过就不再覆盖 */
+  var dEl = $('#f_due_date'), cEl = $('#f_card_id'), pEl = $('#f_period');
+  if (dEl) {
+    dEl._touched = false;
+    var syncDue = function () {
+      if (dEl._touched) return;
+      var cd = cardById(cEl ? cEl.value : null) || S.cards[0];
+      var pd = pEl ? String(pEl.value || '').trim() : '';
+      if (!cd || !/^\d{4}-\d{2}$/.test(pd)) return;
+      dEl.value = dueDateOf(pd, cd.due_day || 23, cd.bill_day || 5);
+    };
+    dEl.onchange = function () { dEl._touched = true; };
+    if (cEl) cEl.onchange = function () { dEl._touched = false; syncDue(); };
+    if (pEl) pEl.oninput = function () { dEl._touched = false; syncDue(); };
+    syncDue();
+  }
+
   if (b.id) {
     $('#delBill').onclick = async function () {
       if (!confirm('确定删除这笔账单？')) return;
