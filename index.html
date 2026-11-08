@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1">
+<meta name="theme-color" content="#2e5496">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="信用卡管家">
+<title>信用卡管家</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============ 登录 ============ -->
+<div id="authView" class="auth hidden">
+  <h2>信用卡管家</h2>
+  <p class="sub">数据只存在你自己的 Supabase 里</p>
+  <div class="card">
+    <div id="authMsg" class="msg"></div>
+    <label class="field"><span>邮箱</span><input id="authEmail" type="email" autocomplete="username" placeholder="you@example.com"></label>
+    <label class="field"><span>密码</span><input id="authPass" type="password" autocomplete="current-password" placeholder="至少 6 位"></label>
+    <button class="btn primary block" id="btnLogin">登录</button>
+    <div style="height:8px"></div>
+    <button class="btn block" id="btnSignup">第一次用，注册账号</button>
+  </div>
+  <p class="small muted" style="text-align:center;margin-top:16px">登录一次后会自动记住，不用每次输</p>
+</div>
+
+<!-- ============ 主体 ============ -->
+<div id="appView" class="hidden">
+  <div class="topbar">
+    <div>
+      <h1 id="pageTitle">首页</h1>
+      <div class="sub" id="pageSub"></div>
+    </div>
+    <button class="btn sm" id="btnRefresh">刷新</button>
+  </div>
+
+  <div class="wrap">
+    <!-- 首页 -->
+    <section id="page-home">
+      <div id="homeAlert"></div>
+      <div class="kpi" id="homeKpi"></div>
+      <div class="card">
+        <p class="card-title">待办提醒（按到期日排序）</p>
+        <div id="homeList"></div>
+      </div>
+    </section>
+
+    <!-- 账单 -->
+    <section id="page-bills" class="hidden">
+      <div class="tabs">
+        <button data-tab="card" class="on">信用卡账单</button>
+        <button data-tab="fixed">固定月供</button>
+      </div>
+      <div id="billsCard">
+        <button class="btn primary block" id="btnAddBill" style="margin-bottom:12px">+ 记一笔账单</button>
+        <div class="card"><div id="billList"></div></div>
+      </div>
+      <div id="billsFixed" class="hidden">
+        <button class="btn primary block" id="btnAddFixed" style="margin-bottom:12px">+ 添加房贷 / 房租</button>
+        <div id="fixedList"></div>
+      </div>
+    </section>
+
+    <!-- 还款 -->
+    <section id="page-reps" class="hidden">
+      <button class="btn primary block" id="btnAddRep" style="margin-bottom:12px">+ 记一笔还款</button>
+      <div class="card"><div id="repList"></div></div>
+    </section>
+
+    <!-- 分析 -->
+    <section id="page-stats" class="hidden">
+      <div class="kpi" id="statsKpi"></div>
+      <div class="card">
+        <p class="card-title">额度使用率</p>
+        <div id="statsCards"></div>
+      </div>
+      <div class="card">
+        <p class="card-title">近 12 个月账单</p>
+        <div id="statsTrend"></div>
+      </div>
+      <div class="card">
+        <p class="card-title">固定月供构成</p>
+        <div id="statsFixed"></div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="page-settings" class="hidden">
+      <div class="card">
+        <p class="card-title">信用卡</p>
+        <div id="cardList"></div>
+        <div style="height:10px"></div>
+        <button class="btn block" id="btnAddCard">+ 添加信用卡</button>
+      </div>
+      <div class="card">
+        <p class="card-title">数据</p>
+        <div class="btn-row" style="margin-bottom:8px">
+          <button class="btn sm" id="btnExport">导出备份</button>
+          <button class="btn sm" id="btnImport">恢复备份</button>
+        </div>
+        <p class="small muted" style="margin:0">数据存在你自己注册的 Supabase 云端数据库，换手机登录同一账号即可看到。</p>
+      </div>
+      <div class="card">
+        <p class="card-title">账号</p>
+        <div class="item" style="border:none;padding:0">
+          <div class="grow"><div class="t1" id="userEmail">-</div><div class="t2">已登录</div></div>
+          <button class="btn sm danger" id="btnLogout">退出</button>
+        </div>
+      </div>
+      <p class="small muted" style="text-align:center;padding:6px 0 14px">信用卡管家 · 自用版 v1.0</p>
+    </section>
+  </div>
+
+  <nav class="nav" id="nav">
+    <button data-page="home" class="on"><span class="ico">🏠</span>首页</button>
+    <button data-page="bills"><span class="ico">🧾</span>账单</button>
+    <button data-page="reps"><span class="ico">💳</span>还款</button>
+    <button data-page="stats"><span class="ico">📊</span>分析</button>
+    <button data-page="settings"><span class="ico">⚙️</span>设置</button>
+  </nav>
+</div>
+
+<div id="sheetRoot"></div>
+<div id="toast" class="toast"></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
