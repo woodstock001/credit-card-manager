@@ -244,54 +244,444 @@ function renderHome() {
 }
 function kpi(k, v) { return '<div class="box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
 
-/* ============ 渲染：账单 ============ */
-function renderBills() {
-  var host = $('#billList');
-  if (!S.bills.length) { host.innerHTML = '<div class="empty"><span class="ico">🧾</span>还没有账单记录</div>'; }
-  else {
-    host.innerHTML = S.bills.map(function (b) {
-      var rem = billRemain(b);
-      var c = cardById(b.card_id);
-      var due = b.due_date || (b.period ? dueDateOf(b.period, (c && c.due_day) || 23) : '');
-      var tag = rem <= 0 ? '<span class="tag green">已还清</span>'
-        : (b.paid_cents > 0 ? '<span class="tag orange">部分已还</span>' : '<span class="tag gray">未还</span>');
-      return '<div class="item"><div class="grow"><div class="t1">' + esc(cardName(b.card_id)) + ' · ' + esc(b.period) + tag + '</div>' +
-        '<div class="t2">账单 ¥' + fmt(b.amount_cents) + ' · 待还 ¥' + fmt(rem) + (due ? ' · 到期 ' + esc(due) : '') + '</div></div>' +
-        '<div style="text-align:right"><button class="btn sm" data-bill="' + esc(b.id) + '">编辑</button></div></div>';
-    }).join('');
-  }
-  renderFixedList();
+/* ============ 账单页：按卡一屏（对齐 51 信用卡管家） ============ */
+
+/* 银行主题色 */
+var BANK_COLOR = [
+  ['邮储', '#00713c'], ['邮政', '#00713c'], ['工行', '#c7000b'], ['工商', '#c7000b'],
+  ['招行', '#e60012'], ['招商', '#e60012'], ['建行', '#0066b3'], ['建设', '#0066b3'],
+  ['农行', '#00954e'], ['农业', '#00954e'], ['中行', '#a8121f'], ['中国', '#a8121f'],
+  ['交行', '#0055a5'], ['交通', '#0055a5'], ['平安', '#e8590c'], ['中信', '#c8102e'],
+  ['浦发', '#005bac'], ['民生', '#0b4ea2'], ['兴业', '#0056a4'], ['光大', '#7b2d8e'],
+  ['华夏', '#c8102e'], ['广发', '#c8102e'], ['北京', '#c8102e'], ['上海', '#005bac'],
+  ['宁波', '#005bac'], ['江苏', '#c8102e'], ['杭州', '#005bac'], ['成都', '#c8102e'],
+  ['花旗', '#056dae'], ['渣打', '#0072aa']
+];
+function bankColor(name) {
+  var s = String(name || '');
+  for (var i = 0; i < BANK_COLOR.length; i++) if (s.indexOf(BANK_COLOR[i][0]) >= 0) return BANK_COLOR[i][1];
+  return '#4a5a70';
 }
-function renderFixedList() {
-  var host = $('#fixedList');
-  if (!S.fixed.length) { host.innerHTML = '<div class="card"><div class="empty"><span class="ico">🏠</span>还没有房贷 / 房租记录</div></div>'; return; }
+function bankInitial(name) {
+  var s = String(name || '').replace(/银行|信用卡|储蓄卡/g, '').trim();
+  return s ? s.charAt(0) : '卡';
+}
+
+/* 最长免息天数
+ * 公式：一个完整账单周期（约 31 天）+ 账单日到还款日的宽限天数
+ * 例：账单日 5 号 / 还款日 23 号 → 31 + 18 = 49 天
+ */
+function graceDays(billDay, dueDay) {
+  var b = parseInt(billDay, 10) || 5;
+  var d = parseInt(dueDay, 10) || 23;
+  var gap = d - b;
+  if (gap <= 0) gap += 31;      /* 还款日落在次月 */
+  return gap + 31;              /* 加一个完整账单周期 */
+}
+
+/* 某张卡的当前状态 */
+function cardState(c) {
   var cur = periodOf(todayISO());
+  var billDay = c.bill_day || 5;
+  var dueDay = c.due_day || 23;
+  var bills = S.bills.filter(function (b) { return b.card_id === c.id; })
+    .sort(function (a, b) { return a.period < b.period ? 1 : a.period > b.period ? -1 : 0; });
+
+  /* 1. 有未还清账单 → 取到期最早的那一期 */
+  var unpaid = bills.filter(function (b) { return billRemain(b) > 0; });
+  if (unpaid.length) {
+    unpaid.sort(function (a, b) {
+      var da = a.due_date || dueDateOf(a.period, dueDay);
+      var db = b.due_date || dueDateOf(b.period, dueDay);
+      return da < db ? -1 : da > db ? 1 : 0;
+    });
+    var b0 = unpaid[0];
+    var due0 = b0.due_date || dueDateOf(b0.period, dueDay);
+    return {
+      type: 'unpaid', bill: b0, amount: billRemain(b0),
+      label: (b0.paid_cents || 0) > 0 ? '剩余应还' : '本期账单',
+      due: due0, days: daysFromToday(due0),
+      btn: '还款', btnCls: 'pay'
+    };
+  }
+
+  /* 2. 无欠款 → 看出账状态 */
+  var thisBillDate = dueDateOf(cur, billDay);
+  var dd = daysFromToday(thisBillDate);
+  var hasThisMonth = false;
+  for (var i = 0; i < bills.length; i++) if (periodOf(bills[i].period) === cur) { hasThisMonth = true; break; }
+
+  if (hasThisMonth) {
+    return {
+      type: 'cleared', bill: bills[0], amount: 0, label: '本期已还清',
+      due: thisBillDate, days: dd,
+      mark: thisBillDate.slice(5), markUnit: '已出账',
+      btn: '本期已还清', btnCls: 'done'
+    };
+  }
+  if (dd <= 0) {
+    return {
+      type: 'missing', amount: 0, label: '待录入账单',
+      due: thisBillDate, days: dd,
+      mark: thisBillDate.slice(5), markUnit: '已出账',
+      btn: '去录入', btnCls: 'todo'
+    };
+  }
+  return {
+    type: 'pending', amount: 0, label: '未出账单',
+    due: thisBillDate, days: dd,
+    mark: thisBillDate.slice(5), markUnit: '天后出账',
+    btn: '本期无需还', btnCls: 'done'
+  };
+}
+
+/* 某条固定支出的本月状态 */
+function fixedState(f) {
+  if (!f || f.is_active === false) return null;
+  var cur = periodOf(todayISO());
+  if (f.start_period && cur < f.start_period) return null;
+  if (f.end_period && cur > f.end_period) return null;
+  var due = dueDateOf(cur, f.pay_day);
+  var rec = null;
+  for (var i = 0; i < S.frecs.length; i++) {
+    if (S.frecs[i].fixed_payment_id === f.id && S.frecs[i].period === cur) { rec = S.frecs[i]; break; }
+  }
+  var paid = !!(rec && rec.status === 'paid');
+  return {
+    type: paid ? 'fcleared' : 'funpaid', fixed: f, period: cur, rec: rec,
+    amount: paid ? 0 : (f.amount_cents || 0),
+    label: paid ? '本期已还清' : '本期应还',
+    due: due, days: daysFromToday(due),
+    mark: due.slice(5), markUnit: paid ? '已还' : '',
+    btn: paid ? '本期已还' : '还款', btnCls: paid ? 'done' : 'pay'
+  };
+}
+
+/* 组装混排列表：有欠款的在前，其余按到期日 */
+function boardItems() {
+  var out = [];
+  S.cards.forEach(function (c) {
+    if (c.is_active === false) return;
+    var st = cardState(c);
+    out.push({
+      kind: 'card', card: c, st: st, key: st.due || '9999-99-99',
+      active: st.type === 'unpaid' || st.type === 'missing'
+    });
+  });
+  S.fixed.forEach(function (f) {
+    var st = fixedState(f);
+    if (!st) return;
+    out.push({ kind: 'fixed', fixed: f, st: st, key: st.due, active: st.type === 'funpaid' });
+  });
+  out.sort(function (a, b) {
+    if (a.active !== b.active) return a.active ? -1 : 1;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+  return out;
+}
+
+/* 右侧倒计时区域 */
+function daysHTML(st) {
+  var d = st.days;
+  if (st.type === 'unpaid' || st.type === 'funpaid') {
+    if (d === 0) return '<div class="cc-days"><div class="cc-d sm">今</div><div class="cc-dt">天到期<b>' + esc(st.due.slice(5)) + '</b></div></div>';
+    if (d < 0) return '<div class="cc-days"><div class="cc-d red">' + (-d) + '</div><div class="cc-dt">天前逾期<b>' + esc(st.due.slice(5)) + '</b></div></div>';
+    return '<div class="cc-days"><div class="cc-d">' + d + '</div><div class="cc-dt">天后到期<b>' + esc(st.due.slice(5)) + '</b></div></div>';
+  }
+  if (st.type === 'pending') {
+    if (d === 0) return '<div class="cc-days"><div class="cc-d sm">今</div><div class="cc-dt">天出账<b>' + esc(st.mark) + '</b></div></div>';
+    return '<div class="cc-days"><div class="cc-d">' + d + '</div><div class="cc-dt">天后出账<b>' + esc(st.mark) + '</b></div></div>';
+  }
+  return '<div class="cc-days"><div class="cc-d sm">' + esc(st.mark || '') + '</div><div class="cc-dt">' + esc(st.markUnit || '已出账') + '</div></div>';
+}
+
+/* 当前渲染出来的条目索引 */
+var BOARD = {};
+
+function renderBills() {
+  BOARD = {};
+  var items = boardItems();
+  var host = $('#cardBoard');
+
+  /* --- 汇总：全部待还 --- */
+  var totalDue = 0;
+  items.forEach(function (it) {
+    if (it.st.type === 'unpaid' || it.st.type === 'funpaid') totalDue += it.st.amount;
+  });
+  var sd = $('#sumDue');
+  if (sd) {
+    sd.className = 's-item' + (totalDue > 0 ? '' : ' zero');
+    sd.innerHTML = '<div class="s-k">全部待还</div><div class="s-v">¥' + fmt(totalDue) + '<span class="arw">\u203a</span></div>';
+  }
+
+  /* --- 汇总：最长免息 --- */
+  var bestDays = 0, bestCard = null;
+  S.cards.forEach(function (c) {
+    if (c.is_active === false) return;
+    var g = graceDays(c.bill_day, c.due_day);
+    if (g > bestDays) { bestDays = g; bestCard = c; }
+  });
+  var sg = $('#sumGrace');
+  if (sg) {
+    sg.innerHTML = bestCard
+      ? '<div class="s-k">最长免息</div><div class="s-v">' + bestDays + ' 天<span class="arw">\u203a</span></div>'
+      : '<div class="s-k">最长免息</div><div class="s-v">--<span class="arw">\u203a</span></div>';
+  }
+
+  if (!items.length) {
+    host.innerHTML = '<div class="card"><div class="empty"><span class="ico">\ud83d\udcb3</span>' +
+      '还没有信用卡和固定支出<br><span class="small">去「设置」里添加第一张卡</span></div></div>';
+    return;
+  }
+
+  host.innerHTML = items.map(function (it) {
+    var st = it.st;
+    var isCard = it.kind === 'card';
+    var name, logoBg, logoCh;
+
+    if (isCard) {
+      var c = it.card;
+      name = (c.alias || c.bank || '信用卡') + (c.last4 ? ' ' + c.last4 : '');
+      logoBg = bankColor(c.bank || c.alias);
+      logoCh = bankInitial(c.bank || c.alias);
+    } else {
+      name = it.fixed.name;
+      logoBg = '#4a7ab5';
+      logoCh = bankInitial(it.fixed.name);
+    }
+
+    var ov = ((st.type === 'unpaid' || st.type === 'funpaid') && st.days < 0);
+    var dimmed = (st.btnCls === 'done') ? ' dimmed' : '';
+    var id = (isCard ? 'c:' : 'f:') + (isCard ? it.card.id : it.fixed.id);
+    BOARD[id] = it;
+
+    var amt = st.amount > 0
+      ? '<div class="cc-num">' + fmt(st.amount) + '</div>'
+      : '<div class="cc-num dim">--</div>';
+
+    return '<div class="cc' + (ov ? ' overdue' : '') + dimmed + '">' +
+      '<div class="cc-head">' +
+        '<span class="cc-logo" style="background:' + logoBg + '">' + esc(logoCh) + '</span>' +
+        '<span class="cc-name">' + esc(name) + '</span>' +
+        '<button class="cc-more" data-more="' + esc(id) + '">\u00b7\u00b7\u00b7</button>' +
+      '</div>' +
+      '<div class="cc-body">' +
+        '<div class="cc-amt">' + amt + '<div class="cc-lab">' + esc(st.label) + '</div></div>' +
+        daysHTML(st) +
+        '<button class="cc-btn ' + st.btnCls + '" data-main="' + esc(id) + '">' + esc(st.btn) + '</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+/* ---------- 全部待还明细 ---------- */
+function showDueDetail() {
+  var items = boardItems().filter(function (it) {
+    return it.st.type === 'unpaid' || it.st.type === 'funpaid';
+  });
+  var body = items.length
+    ? items.map(function (it) {
+      var nm = it.kind === 'card'
+        ? ((it.card.alias || it.card.bank) + (it.card.last4 ? ' ' + it.card.last4 : ''))
+        : it.fixed.name;
+      return '<div class="calc-row" style="padding:8px 0"><span>' + esc(nm) +
+        '<br><span class="small muted">' + esc(it.st.due) +
+        (it.st.days < 0 ? ' · 已逾期' : it.st.days === 0 ? ' · 今天到期' : ' · ' + it.st.days + ' 天后') +
+        '</span></span><b>¥' + fmt(it.st.amount) + '</b></div>';
+    }).join('')
+    : '<div class="empty" style="padding:20px">全部结清，没有待还</div>';
+  var total = items.reduce(function (s, it) { return s + it.st.amount; }, 0);
+  var root = $('#sheetRoot');
+  root.innerHTML = '<div class="sheet-mask" id="mask"><div class="sheet">' +
+    '<h3>全部待还 ¥' + fmt(total) + '</h3>' +
+    '<div class="calc" style="padding:6px 13px">' + body + '</div>' +
+    '<button type="button" class="btn block" id="dClose">关闭</button>' +
+    '</div></div>';
+  $('#dClose').onclick = closeSheet;
+  $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeSheet(); };
+}
+
+/* ---------- 最长免息明细 ---------- */
+function showGraceDetail() {
+  var rows = S.cards.filter(function (c) { return c.is_active !== false; }).map(function (c) {
+    return { card: c, g: graceDays(c.bill_day, c.due_day) };
+  }).sort(function (a, b) { return b.g - a.g; });
+
+  var body = rows.length
+    ? rows.map(function (r) {
+      var nm = (r.card.alias || r.card.bank) + (r.card.last4 ? ' ' + r.card.last4 : '');
+      return '<div class="bar-row"><div class="lab"><span>' + esc(nm) +
+        '</span><span>' + r.g + ' 天 · ' + esc(r.card.bill_day) + ' 账单日 / ' + esc(r.card.due_day) + ' 还款日</span></div>' +
+        '<div class="bar-track"><div class="bar-fill" style="width:' +
+        Math.min(100, r.g / Math.max(1, rows[0].g) * 100).toFixed(1) + '%"></div></div></div>';
+    }).join('')
+    : '<div class="empty" style="padding:20px">还没有信用卡</div>';
+
+  var root = $('#sheetRoot');
+  root.innerHTML = '<div class="sheet-mask" id="mask"><div class="sheet">' +
+    '<h3>免息期排行</h3>' +
+    '<p class="small muted" style="margin:-6px 0 12px">= 一个完整账单周期（约 31 天）+ 账单日到还款日的宽限天数。天数越长，越适合把大额消费放这张卡。</p>' +
+    '<div>' + body + '</div>' +
+    '<button type="button" class="btn block" id="gClose" style="margin-top:12px">关闭</button>' +
+    '</div></div>';
+  $('#gClose').onclick = closeSheet;
+  $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeSheet(); };
+}
+
+/* ---------- 三点菜单 ---------- */
+function openMenu(id) {
+  var it = BOARD[id];
+  if (!it) return;
+  var st = it.st;
+  var rows = [];
+
+  if (it.kind === 'card') {
+    if (st.type === 'unpaid') {
+      rows.push({ a: 'pay', t: '标记已还金额', s: '输入已还金额，剩余未还会自动换算' });
+    }
+    if (st.bill) {
+      rows.push({ a: 'bill', t: '修改本期账单', s: '账单金额、最低还款、到期日' });
+    } else {
+      rows.push({ a: 'bill', t: '录入本期账单', s: '本期还没出账，也可以提前录' });
+    }
+    rows.push({ a: 'edit', t: '编辑卡片信息', s: '额度、账单日、还款日' });
+    rows.push({ a: 'reps', t: '查看还款记录' });
+  } else {
+    if (st.type === 'funpaid') {
+      rows.push({ a: 'pay', t: '标记本月已还', s: '输入实还金额' });
+    } else {
+      rows.push({ a: 'unpay', t: '撤销本月已还' });
+    }
+    rows.push({ a: 'edit', t: '编辑这条固定支出', s: '金额、每月几号、起止年月' });
+  }
+
+  var html = rows.map(function (r) {
+    return '<button class="act" data-m="' + r.a + '">' + esc(r.t) +
+      (r.s ? '<span class="sub">' + esc(r.s) + '</span>' : '') + '</button>';
+  }).join('') + '<button class="act cancel" data-m="cancel">取消</button>';
+
+  var root = $('#sheetRoot');
+  root.innerHTML = '<div class="sheet-mask" id="mask"><div class="sheet" style="padding:0">' +
+    '<div class="acts">' + html + '</div></div></div>';
+  $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeSheet(); };
+  Array.prototype.forEach.call(root.querySelectorAll('[data-m]'), function (b) {
+    b.onclick = function () {
+      var a = b.dataset.m;
+      closeSheet();
+      if (a === 'cancel') return;
+      if (a === 'pay') {
+        if (it.kind === 'card') paySheet(st.bill);
+        else payFixed(it.fixed, st.period);
+      } else if (a === 'bill') {
+        var cur = periodOf(todayISO());
+        billForm(st.bill || {
+          card_id: it.card.id, period: cur,
+          due_date: dueDateOf(cur, it.card.due_day || 23)
+        });
+      } else if (a === 'edit') {
+        if (it.kind === 'card') cardForm(it.card); else fixedForm(it.fixed);
+      } else if (a === 'unpay') {
+        unpayFixed(it.fixed.id, st.period);
+      } else if (a === 'reps') {
+        showPage('reps');
+      }
+    };
+  });
+}
+
+/* 主按钮点击 */
+function mainAction(id) {
+  var it = BOARD[id];
+  if (!it) return;
+  var st = it.st;
+  if (st.btnCls === 'pay') {
+    if (it.kind === 'card') paySheet(st.bill);
+    else payFixed(it.fixed, st.period);
+  } else if (st.type === 'missing') {
+    var cur = periodOf(todayISO());
+    billForm({ card_id: it.card.id, period: cur, due_date: st.due });
+  } else {
+    openMenu(id);
+  }
+}
+
+/* ---------- 标记已还金额（实时换算剩余） ---------- */
+function paySheet(bill) {
+  if (!bill) { toast('还没有本期账单，先录入金额'); return; }
+  var rem = billRemain(bill);
+  var prev = bill.paid_cents || 0;
+  var title = cardName(bill.card_id) + ' · ' + bill.period + ' 账单';
+  var root = $('#sheetRoot');
+
+  root.innerHTML = '<div class="sheet-mask" id="mask"><div class="sheet">' +
+    '<h3>' + esc(title) + '</h3>' +
+    '<div class="calc">' +
+      '<div class="calc-row"><span>本期账单</span><b>¥' + fmt(bill.amount_cents) + '</b></div>' +
+      (prev > 0 ? '<div class="calc-row"><span>之前已还</span><b>¥' + fmt(prev) + '</b></div>' : '') +
+      '<div class="calc-row"><span>当前剩余</span><b>¥' + fmt(rem) + '</b></div>' +
+    '</div>' +
+    '<label class="field"><span>本次已还金额（元）</span>' +
+      '<input id="payAmt" type="number" step="0.01" inputmode="decimal" value="' + (rem / 100).toFixed(2) + '">' +
+    '</label>' +
+    '<div class="calc" style="margin-bottom:12px">' +
+      '<div class="calc-row big" style="border-top:none;margin-top:0;padding-top:0">' +
+        '<span>剩余未还</span><b id="payLeft">¥0.00</b></div>' +
+    '</div>' +
+    '<label class="field"><span>还款日期</span><input id="payDate" type="date" value="' + todayISO() + '"></label>' +
+    '<div class="btn-row"><button type="button" class="btn" id="payCancel">取消</button>' +
+    '<button type="button" class="btn primary" id="payOk">确认已还</button></div>' +
+    '</div></div>';
+
+  function recalc() {
+    var v = toCents($('#payAmt').value);
+    var left = Math.max(0, rem - v);
+    var el = $('#payLeft');
+    if (!el) return;
+    el.textContent = '¥' + fmt(left);
+    el.className = left === 0 ? 'ok' : '';
+  }
+  $('#payAmt').oninput = recalc;
+  recalc();
+  $('#payCancel').onclick = closeSheet;
+  $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeSheet(); };
+
+  $('#payOk').onclick = async function () {
+    var v = toCents($('#payAmt').value);
+    if (!v || v <= 0) { toast('请输入大于 0 的金额'); return; }
+    var btn = $('#payOk');
+    btn.disabled = true; btn.textContent = '保存中…';
+    try {
+      await sb('/rest/v1/repayments', {
+        method: 'POST',
+        body: {
+          card_id: bill.card_id, bill_id: bill.id, period: bill.period,
+          amount_cents: v, paid_at: $('#payDate').value || todayISO(), method: '标记已还'
+        }
+      });
+      await syncBillPaid(bill.id);
+      await loadAll();
+      closeSheet();
+      render();
+      toast('已记录，剩余未还 ¥' + fmt(Math.max(0, rem - v)));
+    } catch (e) {
+      toast('保存失败：' + e.message);
+      btn.disabled = false; btn.textContent = '确认已还';
+    }
+  };
+}
+
+/* ---------- 设置页：固定支出列表 ---------- */
+function renderFixedSettingList() {
+  var host = $('#fixedSettingList');
+  if (!host) return;
+  if (!S.fixed.length) { host.innerHTML = '<div class="empty" style="padding:20px">还没有固定支出</div>'; return; }
+  var names = { mortgage: '房贷', rent: '房租', other: '其他' };
   host.innerHTML = S.fixed.map(function (f) {
-    var recs = S.frecs.filter(function (r) { return r.fixed_payment_id === f.id; })
-      .sort(function (a, b) { return a.period < b.period ? 1 : -1; });
-    var curRec = null;
-    for (var i = 0; i < recs.length; i++) if (recs[i].period === cur) { curRec = recs[i]; break; }
-    var due = dueDateOf(cur, f.pay_day);
-    var paid = curRec && curRec.status === 'paid';
-    var overdue = !paid && daysFromToday(due) < 0 && (!f.end_period || cur <= f.end_period);
-    var tag = !f.is_active ? '<span class="tag gray">已停用</span>'
-      : paid ? '<span class="tag green">本月已还</span>'
-        : overdue ? '<span class="tag red">本月逾期</span>' : '<span class="tag orange">本月待还</span>';
-    var typeName = { mortgage: '房贷', rent: '房租', other: '其他' }[f.type] || '其他';
-    var hist = recs.slice(0, 6).map(function (r) {
-      return '<div class="item" style="padding:6px 0"><div class="grow"><div class="t2" style="margin:0">' + esc(r.period) +
-        ' · 到期 ' + esc(r.due_date) + '</div></div><div class="small ' + (r.status === 'paid' ? 'muted' : '') + '">' +
-        (r.status === 'paid' ? ('已还 ¥' + fmt(r.paid_cents || r.due_cents)) : '未还') + '</div></div>';
-    }).join('');
-    return '<div class="card"><div class="item" style="border:none;padding:0 0 8px">' +
-      '<div class="grow"><div class="t1">' + esc(f.name) + tag + '</div>' +
-      '<div class="t2">' + typeName + ' · 每月 ' + esc(f.pay_day) + ' 号 · ¥' + fmt(f.amount_cents) + '</div></div>' +
-      '<button class="btn sm" data-fixed="' + esc(f.id) + '">编辑</button></div>' +
-      (paid
-        ? '<button class="btn sm block" data-unpay="' + esc(f.id) + ':' + esc(cur) + '">撤销本月已还</button>'
-        : '<button class="btn sm primary block" data-fpay="' + esc(f.id) + ':' + esc(cur) + '">标记本月已还</button>') +
-      (hist ? '<div style="margin-top:10px;border-top:1px solid var(--line);padding-top:6px">' + hist + '</div>' : '') +
-      '</div>';
+    return '<div class="item"><div class="grow"><div class="t1">' + esc(f.name) +
+      (f.is_active === false ? '<span class="tag gray">停用</span>' : '') + '</div>' +
+      '<div class="t2">' + esc(names[f.type] || '其他') + ' · 每月 ' + esc(f.pay_day) + ' 号 · ¥' +
+      fmt(f.amount_cents) + '</div></div>' +
+      '<button class="btn sm" data-fixed="' + esc(f.id) + '">编辑</button></div>';
   }).join('');
 }
 
@@ -376,13 +766,17 @@ function renderStats() {
 function renderSettings() {
   $('#userEmail').textContent = (SESSION && SESSION.email) || '-';
   var host = $('#cardList');
-  if (!S.cards.length) { host.innerHTML = '<div class="empty">还没有信用卡</div>'; return; }
-  host.innerHTML = S.cards.map(function (c) {
-    return '<div class="item"><div class="grow"><div class="t1">' + esc(c.alias || c.bank) + (c.is_active === false ? '<span class="tag gray">停用</span>' : '') + '</div>' +
-      '<div class="t2">' + esc(c.bank) + (c.last4 ? ' · 尾号 ' + esc(c.last4) : '') +
-      ' · 额度 ¥' + fmt(c.credit_limit_cents) + ' · ' + esc(c.bill_day) + ' 账单日 / ' + esc(c.due_day) + ' 还款日</div></div>' +
-      '<button class="btn sm" data-card="' + esc(c.id) + '">编辑</button></div>';
-  }).join('');
+  if (!S.cards.length) {
+    host.innerHTML = '<div class="empty" style="padding:20px">还没有信用卡</div>';
+  } else {
+    host.innerHTML = S.cards.map(function (c) {
+      return '<div class="item"><div class="grow"><div class="t1">' + esc(c.alias || c.bank) + (c.is_active === false ? '<span class="tag gray">停用</span>' : '') + '</div>' +
+        '<div class="t2">' + esc(c.bank) + (c.last4 ? ' · 尾号 ' + esc(c.last4) : '') +
+        ' · 额度 ¥' + fmt(c.credit_limit_cents) + ' · ' + esc(c.bill_day) + ' 账单日 / ' + esc(c.due_day) + ' 还款日</div></div>' +
+        '<button class="btn sm" data-card="' + esc(c.id) + '">编辑</button></div>';
+    }).join('');
+  }
+  renderFixedSettingList();
 }
 
 /* ============ 页面切换 ============ */
@@ -605,24 +999,8 @@ function fixedForm(f) {
   }
 }
 
-/* 标记已还 */
-async function payBill(bill) {
-  var rem = billRemain(bill);
-  openSheet('标记已还 · ' + cardName(bill.card_id) + ' ' + bill.period, [
-    { key: 'amount', label: '实还金额（元）', type: 'money', value: (rem / 100).toFixed(2) },
-    { key: 'paid_at', label: '还款日期', type: 'date', value: todayISO() }
-  ], async function (v) {
-    await sb('/rest/v1/repayments', {
-      method: 'POST',
-      body: {
-        card_id: bill.card_id, bill_id: bill.id, period: bill.period,
-        amount_cents: v.amount, paid_at: v.paid_at || todayISO(), method: '快捷标记'
-      }
-    });
-    await syncBillPaid(bill.id);
-    await loadAll(); render();
-  });
-}
+/* 标记已还（统一走实时换算弹层） */
+function payBill(bill) { paySheet(bill); }
 async function payFixed(f, period) {
   var due = dueDateOf(period, f.pay_day);
   openSheet('标记已还 · ' + f.name + ' ' + period, [
@@ -655,6 +1033,8 @@ function findReminder(key) {
 
 /* ============ 事件绑定 ============ */
 function bind() {
+  if (bind._done) return;
+  bind._done = true;
   Array.prototype.forEach.call(document.querySelectorAll('#nav button'), function (b) {
     b.onclick = function () { showPage(b.dataset.page); };
   });
@@ -666,20 +1046,22 @@ function bind() {
   $('#btnAddRep').onclick = function () { repForm(); };
   $('#btnAddFixed').onclick = function () { fixedForm(null); };
 
-  Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (b) {
-    b.onclick = function () {
-      S.billTab = b.dataset.tab;
-      Array.prototype.forEach.call(document.querySelectorAll('.tabs button'), function (x) { x.classList.toggle('on', x === b); });
-      $('#billsCard').classList.toggle('hidden', S.billTab !== 'card');
-      $('#billsFixed').classList.toggle('hidden', S.billTab !== 'fixed');
-    };
-  });
+  var bf2 = $('#btnAddFixed2');
+  if (bf2) bf2.onclick = function () { fixedForm(null); };
+  var sDue = $('#sumDue');
+  if (sDue) sDue.onclick = showDueDetail;
+  var sGr = $('#sumGrace');
+  if (sGr) sGr.onclick = showGraceDetail;
 
   document.addEventListener('click', async function (e) {
-    var t = e.target.closest('[data-pay],[data-bill],[data-fixed],[data-fpay],[data-unpay],[data-delrep],[data-card]');
+    var t = e.target.closest('[data-more],[data-main],[data-pay],[data-bill],[data-fixed],[data-fpay],[data-unpay],[data-delrep],[data-card]');
     if (!t) return;
     try {
-      if (t.dataset.pay) {
+      if (t.dataset.more) {
+        openMenu(t.dataset.more);
+      } else if (t.dataset.main) {
+        mainAction(t.dataset.main);
+      } else if (t.dataset.pay) {
         var n = findReminder(t.dataset.pay);
         if (!n) return;
         if (n.kind === 'bill') payBill(n.bill); else payFixed(n.fixed, n.period);

@@ -51,19 +51,25 @@
       </div>
     </section>
 
-    <!-- 账单 -->
+    <!-- 账单（按卡一屏） -->
     <section id="page-bills" class="hidden">
-      <div class="tabs">
-        <button data-tab="card" class="on">信用卡账单</button>
-        <button data-tab="fixed">固定月供</button>
+      <div class="summary">
+        <div class="s-item" id="sumDue">
+          <div class="s-k">全部待还</div>
+          <div class="s-v">¥0.00<span class="arw">›</span></div>
+        </div>
+        <div class="s-div"></div>
+        <div class="s-item" id="sumGrace">
+          <div class="s-k">最长免息</div>
+          <div class="s-v">--<span class="arw">›</span></div>
+        </div>
       </div>
-      <div id="billsCard">
-        <button class="btn primary block" id="btnAddBill" style="margin-bottom:12px">+ 记一笔账单</button>
-        <div class="card"><div id="billList"></div></div>
-      </div>
-      <div id="billsFixed" class="hidden">
-        <button class="btn primary block" id="btnAddFixed" style="margin-bottom:12px">+ 添加房贷 / 房租</button>
-        <div id="fixedList"></div>
+
+      <div id="cardBoard"></div>
+
+      <div class="bill-actions">
+        <button class="btn" id="btnAddBill">+ 录入账单</button>
+        <button class="btn" id="btnAddFixed">+ 固定支出</button>
       </div>
     </section>
 
@@ -97,6 +103,12 @@
         <div id="cardList"></div>
         <div style="height:10px"></div>
         <button class="btn block" id="btnAddCard">+ 添加信用卡</button>
+      </div>
+      <div class="card">
+        <p class="card-title">固定支出（房贷 / 房租 / 保险等）</p>
+        <div id="fixedSettingList"></div>
+        <div style="height:10px"></div>
+        <button class="btn block" id="btnAddFixed2">+ 添加固定支出</button>
       </div>
       <div class="card">
         <p class="card-title">数据</p>
