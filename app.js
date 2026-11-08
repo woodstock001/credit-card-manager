@@ -55,6 +55,37 @@ function dueDayLabel(billDay, dueDay) {
   var d = parseInt(dueDay, 10) || 23;
   return (dueNextMonth(billDay, dueDay) ? '次月' : '当月') + d + '日';
 }
+
+/* ---------- 年费 ----------
+ * annual_fee_month      每年几月扣年费（1-12），空 = 这张卡没有年费
+ * annual_fee_rule       免年费条件，纯文字，自己录入（如「刷6次免」）
+ * annual_fee_waived_year 标记「今年已免」时写入年份
+ *
+ * 「第二年自动变回未免」不靠定时任务：只存年份，渲染时跟当前年份比，
+ * 等于今年才显示已免，跨年自动就是未免。
+ */
+function annualFeeState(c) {
+  var m = parseInt(c && c.annual_fee_month, 10);
+  if (!m || m < 1 || m > 12) return null;
+  var y = new Date().getFullYear();
+  var waived = parseInt(c.annual_fee_waived_year, 10) === y;
+  var due = y + '-' + p2(m) + '-01';
+  var days = daysFromToday(due);
+  var endOfMonth = y + '-' + p2(m) + '-' + p2(lastDay(y, m));
+  var daysToEnd = daysFromToday(endOfMonth);
+  return {
+    month: m, year: y, due: due, days: days, daysToEnd: daysToEnd,
+    waived: waived, rule: (c.annual_fee_rule || '').trim(),
+    /* 该进提醒：今年还没标已免，且落在「年费月前 5 天 ~ 该月最后一天」区间 */
+    alert: !waived && days <= 5 && daysToEnd >= 0
+  };
+}
+/* 年费在界面上的短描述：6月 · 刷6次免 */
+function annualFeeText(c) {
+  var fs = annualFeeState(c);
+  if (!fs) return '';
+  return fs.month + '月年费' + (fs.rule ? ' · ' + fs.rule : '');
+}
 function daysFromToday(dateStr) {
   if (!dateStr) return null;
   var p = dateStr.split('-').map(Number);
@@ -206,8 +237,26 @@ function reminders() {
       });
     });
   });
+  /* 年费：到年费月前 5 天开始提示，标记「今年已免」后消失 */
+  S.cards.forEach(function (c) {
+    if (c.is_active === false) return;
+    var fs = annualFeeState(c);
+    if (!fs || !fs.alert) return;
+    out.push({
+      kind: 'annualfee', key: 'a:' + c.id,
+      title: c.alias || c.bank || '信用卡',
+      sub: annualFeeText(c), due: fs.due, days: fs.days,
+      amount: 0, card: c, fee: fs
+    });
+  });
   out.sort(function (a, b) { return a.due < b.due ? -1 : a.due > b.due ? 1 : 0; });
   return out;
+}
+function feeTag(days) {
+  if (days < 0) return '<span class="tag orange">年费月已到</span>';
+  if (days === 0) return '<span class="tag orange">本月年费月</span>';
+  if (days <= 5) return '<span class="tag orange">还有 ' + days + ' 天</span>';
+  return '<span class="tag gray">还有 ' + days + ' 天</span>';
 }
 function statusTag(days) {
   if (days < 0) return '<span class="tag red">逾期 ' + (-days) + ' 天</span>';
@@ -224,13 +273,20 @@ function renderHome() {
     box.innerHTML = '<div class="alert ok"><div class="lbl">当前状态</div><div class="big">暂无待还</div><div class="small" style="margin-top:4px">所有账单和月供都已结清</div></div>';
   } else {
     var n = list[0];
+    var isFee = n.kind === 'annualfee';
     var cls = n.days < 0 ? 'danger' : (n.days <= 5 ? 'warn' : 'ok');
-    var head = n.days < 0 ? ('已逾期 ' + (-n.days) + ' 天') : (n.days === 0 ? '今天到期' : ('还有 ' + n.days + ' 天'));
+    var head = n.days < 0 ? ('已到年费月 ' + (-n.days) + ' 天') : (n.days === 0 ? '本月是年费月' : ('还有 ' + n.days + ' 天到年费月'));
+    if (!isFee) head = n.days < 0 ? ('已逾期 ' + (-n.days) + ' 天') : (n.days === 0 ? '今天到期' : ('还有 ' + n.days + ' 天'));
     box.innerHTML =
       '<div class="alert ' + cls + '">' +
       '<div class="lbl">' + esc(n.title) + ' · ' + esc(n.sub) + ' · ' + esc(n.due) + '</div>' +
-      '<div class="row"><div><div class="big">¥' + fmt(n.amount) + '</div><div class="small" style="margin-top:2px">' + head + '</div></div>' +
-      '<button class="btn sm" data-pay="' + esc(n.key) + '">标记已还</button></div></div>';
+      '<div class="row"><div>' +
+        (isFee ? '<div class="big" style="font-size:17px">年费月</div>' : '<div class="big">¥' + fmt(n.amount) + '</div>') +
+        '<div class="small" style="margin-top:2px">' + esc(head) + '</div></div>' +
+      (isFee
+        ? '<button class="btn sm" data-feewaive="' + esc(n.card.id) + '">标记已免</button>'
+        : '<button class="btn sm" data-pay="' + esc(n.key) + '">标记已还</button>') +
+      '</div></div>';
   }
 
   var cur = periodOf(todayISO());
@@ -255,10 +311,15 @@ function renderHome() {
   var host = $('#homeList');
   if (!list.length) { host.innerHTML = '<div class="empty"><span class="ico">✅</span>没有待还项目</div>'; return; }
   host.innerHTML = list.slice(0, 12).map(function (n) {
-    return '<div class="item"><div class="grow"><div class="t1">' + esc(n.title) + statusTag(n.days) + '</div>' +
-      '<div class="t2">' + esc(n.sub) + ' · 到期 ' + esc(n.due) + '</div></div>' +
-      '<div style="text-align:right"><div class="amt">¥' + fmt(n.amount) + '</div>' +
-      '<button class="btn sm" data-pay="' + esc(n.key) + '" style="margin-top:4px">已还</button></div></div>';
+    var isFee = n.kind === 'annualfee';
+    return '<div class="item"><div class="grow"><div class="t1">' + esc(n.title) + (isFee ? feeTag(n.days) : statusTag(n.days)) + '</div>' +
+      '<div class="t2">' + esc(n.sub) + (isFee ? '' : ' · 到期 ' + esc(n.due)) + '</div></div>' +
+      '<div style="text-align:right">' +
+        (isFee ? '<div class="amt" style="font-size:13px;color:var(--muted)">年费</div>' : '<div class="amt">¥' + fmt(n.amount) + '</div>') +
+        (isFee
+          ? '<button class="btn sm" data-feewaive="' + esc(n.card.id) + '" style="margin-top:4px">已免</button>'
+          : '<button class="btn sm" data-pay="' + esc(n.key) + '" style="margin-top:4px">已还</button>') +
+      '</div></div>';
   }).join('');
 }
 function kpi(k, v) { return '<div class="box"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div></div>'; }
@@ -563,7 +624,15 @@ function openMenu(id) {
     } else {
       rows.push({ a: 'bill', t: '录入本期账单', s: '本期还没出账，也可以提前录' });
     }
-    rows.push({ a: 'edit', t: '编辑卡片信息', s: '额度、账单日、还款日' });
+    var fs = annualFeeState(it.card);
+    if (fs) {
+      if (fs.waived) {
+        rows.push({ a: 'feeunwaive', t: '撤销今年已免', s: fs.year + ' 年年费已标记为免，点这里改回未处理' });
+      } else {
+        rows.push({ a: 'feewaive', t: '标记今年年费已免', s: annualFeeText(it.card) });
+      }
+    }
+    rows.push({ a: 'edit', t: '编辑卡片信息', s: '额度、账单日、还款日、年费' });
     rows.push({ a: 'reps', t: '查看还款记录' });
   } else {
     if (st.type === 'funpaid') {
@@ -584,7 +653,7 @@ function openMenu(id) {
     '<div class="acts">' + html + '</div></div></div>';
   $('#mask').onclick = function (e) { if (e.target.id === 'mask') closeSheet(); };
   Array.prototype.forEach.call(root.querySelectorAll('[data-m]'), function (b) {
-    b.onclick = function () {
+    b.onclick = async function () {
       var a = b.dataset.m;
       closeSheet();
       if (a === 'cancel') return;
@@ -601,11 +670,30 @@ function openMenu(id) {
         if (it.kind === 'card') cardForm(it.card); else fixedForm(it.fixed);
       } else if (a === 'unpay') {
         unpayFixed(it.fixed.id, st.period);
+      } else if (a === 'feewaive') {
+        await setAnnualFeeWaived(it.card.id, true);
+      } else if (a === 'feeunwaive') {
+        await setAnnualFeeWaived(it.card.id, false);
       } else if (a === 'reps') {
         showPage('reps');
       }
     };
   });
+}
+
+/* 标记 / 撤销「今年年费已免」 */
+async function setAnnualFeeWaived(cardId, waived) {
+  var y = new Date().getFullYear();
+  try {
+    await sb('/rest/v1/credit_cards?id=eq.' + cardId, {
+      method: 'PATCH', body: { annual_fee_waived_year: waived ? y : null }
+    });
+  } catch (e) {
+    if (/annual_fee/.test(String(e && e.message))) { toast('年费字段还没建，先在 Supabase 跑升级 SQL'); return; }
+    throw e;
+  }
+  await loadAll(); render();
+  toast(waived ? (y + ' 年年费已标记为免') : ('已撤销，' + y + ' 年年费恢复未处理'));
 }
 
 /* 主按钮点击 */
@@ -791,7 +879,14 @@ function renderSettings() {
     host.innerHTML = S.cards.map(function (c) {
       return '<div class="item"><div class="grow"><div class="t1">' + esc(c.alias || c.bank) + (c.is_active === false ? '<span class="tag gray">停用</span>' : '') + '</div>' +
         '<div class="t2">' + esc(c.bank) + (c.last4 ? ' · 尾号 ' + esc(c.last4) : '') +
-        ' · 额度 ¥' + fmt(c.credit_limit_cents) + ' · ' + esc(c.bill_day) + ' 日账单 / ' + esc(dueDayLabel(c.bill_day, c.due_day)) + '还款</div></div>' +
+        ' · 额度 ¥' + fmt(c.credit_limit_cents) + ' · ' + esc(c.bill_day) + ' 日账单 / ' + esc(dueDayLabel(c.bill_day, c.due_day)) + '还款' +
+        (annualFeeState(c) ? '<br>年费 ' + esc(annualFeeState(c).month) + ' 月' +
+          (annualFeeState(c).rule ? ' · ' + esc(annualFeeState(c).rule) : '') + ' · ' +
+          (annualFeeState(c).waived
+            ? '<span style="color:var(--ok)">' + annualFeeState(c).year + ' 年已免 ✓</span>'
+            : '<span style="color:var(--warn)">' + annualFeeState(c).year + ' 年未处理</span>')
+          : '') +
+        '</div></div>' +
         '<button class="btn sm" data-card="' + esc(c.id) + '">编辑</button></div>';
     }).join('');
   }
@@ -877,6 +972,9 @@ function cardForm(c) {
     { key: 'credit_limit', label: '信用额度（元）', type: 'money', value: c.credit_limit_cents ? (c.credit_limit_cents / 100) : '' },
     { key: 'bill_day', label: '账单日（每月几号）', type: 'number', value: c.bill_day || 5 },
     { key: 'due_day', label: '还款日（每月几号，小于账单日算次月）', type: 'number', value: c.due_day || 23 },
+    { key: 'annual_fee_month', label: '年费月份（1-12，留空=没有年费）', type: 'number', value: c.annual_fee_month || '' },
+    { key: 'annual_fee_rule', label: '免年费条件', type: 'text', value: c.annual_fee_rule, placeholder: '刷6次免 / 刚性不免' },
+    { key: 'fee_waived', label: '今年年费已免（跨年自动重置）', type: 'bool', value: parseInt(c.annual_fee_waived_year, 10) === new Date().getFullYear() },
     { key: 'auto_pay', label: '自动还款', type: 'bool', value: !!c.auto_pay },
     { key: 'is_active', label: '启用', type: 'bool', value: c.is_active !== false }
   ];
@@ -884,11 +982,23 @@ function cardForm(c) {
     var body = {
       bank: v.bank, alias: v.alias, last4: v.last4,
       credit_limit_cents: v.credit_limit, bill_day: v.bill_day, due_day: v.due_day,
+      annual_fee_month: (v.annual_fee_month >= 1 && v.annual_fee_month <= 12) ? v.annual_fee_month : null,
+      annual_fee_rule: v.annual_fee_rule,
+      annual_fee_waived_year: v.fee_waived ? new Date().getFullYear() : null,
       auto_pay: v.auto_pay, is_active: v.is_active
     };
     if (!body.bank) throw new Error('银行必填');
-    if (c.id) await sb('/rest/v1/credit_cards?id=eq.' + c.id, { method: 'PATCH', body: body });
-    else await addCard(body);
+    /* 年费字段还没在数据库建好时，降级保存其余字段并提示 */
+    try {
+      if (c.id) await sb('/rest/v1/credit_cards?id=eq.' + c.id, { method: 'PATCH', body: body });
+      else await addCard(body);
+    } catch (e1) {
+      if (!/annual_fee/.test(String(e1 && e1.message))) throw e1;
+      ['annual_fee_month', 'annual_fee_rule', 'annual_fee_waived_year'].forEach(function (k) { delete body[k]; });
+      if (c.id) await sb('/rest/v1/credit_cards?id=eq.' + c.id, { method: 'PATCH', body: body });
+      else await addCard(body);
+      toast('年费字段还没建，先在 Supabase 跑一次升级 SQL');
+    }
     await loadAll(); render();
   }, c.id ? '<button type="button" class="btn danger block" id="delCard">删除这张卡</button>' : '');
   if (c.id) {
@@ -1094,7 +1204,7 @@ function bind() {
   if (sGr) sGr.onclick = showGraceDetail;
 
   document.addEventListener('click', async function (e) {
-    var t = e.target.closest('[data-more],[data-main],[data-pay],[data-bill],[data-fixed],[data-fpay],[data-unpay],[data-delrep],[data-card]');
+    var t = e.target.closest('[data-more],[data-main],[data-pay],[data-bill],[data-fixed],[data-fpay],[data-unpay],[data-delrep],[data-card],[data-feewaive]');
     if (!t) return;
     try {
       if (t.dataset.more) {
@@ -1124,6 +1234,8 @@ function bind() {
         await sb('/rest/v1/repayments?id=eq.' + t.dataset.delrep, { method: 'DELETE' });
         if (rep && rep.bill_id) await syncBillPaid(rep.bill_id);
         await loadAll(); render();
+      } else if (t.dataset.feewaive) {
+        await setAnnualFeeWaived(t.dataset.feewaive, true);
       } else if (t.dataset.card) {
         var c = null; for (var z = 0; z < S.cards.length; z++) if (S.cards[z].id === t.dataset.card) c = S.cards[z];
         if (c) cardForm(c);
