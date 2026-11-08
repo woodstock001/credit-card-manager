@@ -1,7 +1,5 @@
-/* 数据库配置：填你自己 Supabase 项目的 URL 和 anon public key
- * Supabase 控制台 → Project Settings → API
- */
+/* 数据库配置（Supabase 项目：uzahrqhxxkkpnjwrjihz） */
 window.APP_CONFIG = {
-  SUPABASE_URL: "__SUPABASE_URL__",
-  SUPABASE_ANON_KEY: "__SUPABASE_ANON_KEY__"
+  SUPABASE_URL: "https://uzahrqhxxkkpnjwrjihz.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_6Ot3exiReEDfWQWNGm-7Nw_LrGgcl_e"
 };
