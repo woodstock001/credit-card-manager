@@ -438,6 +438,19 @@ function fixedState(f) {
 }
 
 /* 组装混排列表：有欠款的在前，其余按到期日 */
+/* 账单页分四档，档内再按各自日期排
+ *   0 有欠款      → 按到期日（越早越靠上）
+ *   1 待录入账单  → 按出账日（账单日已过但还没录）
+ *   2 将要出账    → 按出账日
+ *   3 已还清      → 沉到最下面
+ */
+function boardLevel(st) {
+  if (st.type === 'unpaid' || st.type === 'funpaid') return 0;
+  if (st.type === 'missing') return 1;
+  if (st.type === 'pending') return 2;
+  return 3;
+}
+
 function boardItems() {
   var out = [];
   S.cards.forEach(function (c) {
@@ -445,16 +458,16 @@ function boardItems() {
     var st = cardState(c);
     out.push({
       kind: 'card', card: c, st: st, key: st.due || '9999-99-99',
-      active: st.type === 'unpaid' || st.type === 'missing'
+      lv: boardLevel(st)
     });
   });
   S.fixed.forEach(function (f) {
     var st = fixedState(f);
     if (!st) return;
-    out.push({ kind: 'fixed', fixed: f, st: st, key: st.due, active: st.type === 'funpaid' });
+    out.push({ kind: 'fixed', fixed: f, st: st, key: st.due || '9999-99-99', lv: boardLevel(st) });
   });
   out.sort(function (a, b) {
-    if (a.active !== b.active) return a.active ? -1 : 1;
+    if (a.lv !== b.lv) return a.lv - b.lv;
     return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
   });
   return out;
