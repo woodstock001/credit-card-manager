@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>网络自检</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:16px;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f6f8;color:#1a1a1a;font-size:15px;line-height:1.6}
+h1{font-size:18px;margin:4px 0 14px}
+.card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.row{display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid #f0f0f0}
+.row:last-child{border-bottom:0}
+.ico{flex:0 0 20px;font-weight:700}
+.ok{color:#0a8f4a}.bad{color:#d93025}.wait{color:#b0b0b0}
+.name{flex:1}
+.detail{font-size:12.5px;color:#666;word-break:break-all;margin-top:2px}
+pre{background:#f7f7f9;border-radius:8px;padding:10px;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:8px 0 0}
+.btn{display:block;width:100%;padding:13px;border:0;border-radius:10px;background:#0a84ff;color:#fff;font-size:16px;font-weight:600;margin-top:8px}
+.btn:active{opacity:.8}
+.sum{margin-top:10px;padding:11px;border-radius:9px;font-size:14px}
+.sum.ok{background:#e6f7ee;color:#0a8f4a}
+.sum.bad{background:#fdecea;color:#c5221f}
+.tip{font-size:13px;color:#666;margin-top:10px}
+</style>
+</head>
+<body>
+
+<h1>信用卡管家 · 网络自检</h1>
+
+<div class="card">
+  <div class="row"><div class="ico wait" id="i1">·</div><div class="name">页面本身能打开<div class="detail">能打开这一页，说明 GitHub Pages 通的</div></div></div>
+  <div class="row"><div class="ico wait" id="i2">·</div><div class="name">读取配置文件 config.js</div></div>
+  <div class="row"><div class="ico wait" id="i3">·</div><div class="name">连接 Supabase 数据库</div><div class="detail" id="d3">这就是登录和存数据用的地址</div></div>
+  <div class="row"><div class="ico wait" id="i4">·</div><div class="name">连接 Supabase 登录服务</div><div class="detail" id="d4"></div></div>
+  <div class="row"><div class="ico wait" id="i5">·</div><div class="name">年费字段是否已建</div></div>
+</div>
+
+<div id="sum"></div>
+<button class="btn" onclick="run()">重新检测</button>
+<div class="tip" id="tip"></div>
+
+<script src="config.js"></script>
+<script>
+var CFG = window.APP_CONFIG || {};
+var BASE = CFG.SUPABASE_URL || '';
+var ANON = CFG.SUPABASE_ANON_KEY || '';
+
+function mark(id, ok, txt){
+  var el = document.getElementById(id);
+  el.className = 'ico ' + (ok === null ? 'wait' : (ok ? 'ok' : 'bad'));
+  el.textContent = ok === null ? '·' : (ok ? '✓' : '✗');
+  if (txt) el.title = txt;
+}
+function setSum(ok, html){
+  document.getElementById('sum').innerHTML = '<div class="sum ' + (ok ? 'ok' : 'bad') + '">' + html + '</div>';
+}
+
+function probe(url, headers, ms){
+  var t0 = Date.now();
+  var ctl = ('AbortController' in window) ? new AbortController() : null;
+  var timer = setTimeout(function(){ if (ctl) ctl.abort(); }, ms || 12000);
+  var opt = { method: 'GET', headers: headers || {} };
+  if (ctl) opt.signal = ctl.signal;
+  return fetch(url, opt).then(function(r){
+    clearTimeout(timer);
+    return r.text().then(function(t){
+      return { ok: true, status: r.status, ms: Date.now() - t0, body: t };
+    });
+  }).catch(function(e){
+    clearTimeout(timer);
+    return { ok: false, err: (e && (e.name + ': ' + e.message)) || String(e), ms: Date.now() - t0 };
+  });
+}
+
+async function run(){
+  ['i1','i2','i3','i4','i5'].forEach(function(k){ mark(k, null); });
+  document.getElementById('sum').innerHTML = '';
+  document.getElementById('tip').textContent = '';
+  mark('i1', true);
+
+  // 2. config.js
+  if (!BASE || !ANON) {
+    mark('i2', false);
+    setSum(false, 'config.js 没读到，或者里面的地址/密钥是空的。<br>说明这个文件没加载成功，不是网络问题，是文件被拦了。');
+    return;
+  }
+  mark('i2', true);
+  document.getElementById('d3').textContent = BASE;
+
+  // 3. 数据库
+  var r3 = await probe(BASE + '/rest/v1/credit_cards?select=id&limit=1',
+    { apikey: ANON, Authorization: 'Bearer ' + ANON }, 12000);
+  if (r3.ok && r3.status === 200) {
+    mark('i3', true);
+    document.getElementById('d3').textContent = '通了 · 耗时 ' + r3.ms + 'ms';
+  } else {
+    mark('i3', false);
+    document.getElementById('d3').textContent = r3.ok ? ('HTTP ' + r3.status + ' · ' + r3.body.slice(0,120))
+      : ('连不上 · ' + r3.err + ' · 耗时 ' + r3.ms + 'ms');
+  }
+
+  // 4. 登录服务
+  var r4 = await probe(BASE + '/auth/v1/health', { apikey: ANON }, 12000);
+  if (r4.ok && r4.status === 200) {
+    mark('i4', true);
+    document.getElementById('d4').textContent = '通了 · 耗时 ' + r4.ms + 'ms';
+  } else {
+    mark('i4', false);
+    document.getElementById('d4').textContent = r4.ok ? ('HTTP ' + r4.status) : ('连不上 · ' + r4.err);
+  }
+
+  // 5. 年费字段
+  var r5 = await probe(BASE + '/rest/v1/credit_cards?select=id,annual_fee_month&limit=1',
+    { apikey: ANON, Authorization: 'Bearer ' + ANON }, 12000);
+  var feeOk = r5.ok && r5.status === 200;
+  mark('i5', feeOk);
+  if (!feeOk && r5.ok && /42703|does not exist/.test(r5.body)) {
+    document.getElementById('d3').title = '年费字段未建';
+  }
+
+  // 结论
+  if (!r3.ok || !r4.ok) {
+    setSum(false, '<b>Supabase 连不上</b> —— 页面本身没问题，是这台设备到 supabase.co 的网络断了。<br>下面照做基本能好。');
+    document.getElementById('tip').innerHTML =
+      '① 切换网络试一次：WiFi ↔ 手机流量，换一个再点「重新检测」<br>' +
+      '② 如果开了 VPN / 加速器 / 代理，先关掉再试；反过来，没开的话试着开一下<br>' +
+      '③ 手机设置里搜「私人 DNS」，如果是开启状态，改成「关闭」或「自动」<br>' +
+      '④ 换一个浏览器打开（华为浏览器换成 Chrome / Edge 再试）<br>' +
+      '⑤ 以上都不行，用另一台设备或另一张手机卡试试，确认是不是本机网络问题';
+  } else if (!feeOk) {
+    setSum(false, '<b>网络没问题，年费字段还没建</b> —— 去 Supabase 后台 SQL Editor 跑一次升级 SQL 就好，其他功能正常可用。');
+  } else {
+    setSum(true, '<b>全部正常</b> —— 网络、数据库、登录服务都通，年费字段也已建好。如果 App 里还登录不了，就是账号密码或缓存问题，回 App 里清一下缓存再试。');
+  }
+}
+
+run();
+</script>
+</body>
+</html>
