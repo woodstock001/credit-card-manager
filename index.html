@@ -73,6 +73,21 @@
       </div>
     </section>
 
+    <!-- 记账 -->
+    <section id="page-ledger" class="hidden">
+      <div class="led-top">
+        <button class="mon-btn" id="ledPrev">‹</button>
+        <span class="mon-lab" id="ledMonthLab"></span>
+        <button class="mon-btn" id="ledNext">›</button>
+      </div>
+      <div class="kpi" id="ledKpi"></div>
+      <button class="btn primary led-add" id="ledAdd">＋ 记一笔</button>
+      <div id="ledTip"></div>
+      <div class="card" id="ledCompare"></div>
+      <div class="card" id="ledCats"></div>
+      <div id="ledDays"></div>
+    </section>
+
     <!-- 还款 -->
     <section id="page-reps" class="hidden">
       <button class="btn primary block" id="btnAddRep" style="margin-bottom:12px">+ 记一笔还款</button>
@@ -132,6 +147,7 @@
   <nav class="nav" id="nav">
     <button data-page="home" class="on"><span class="ico">🏠</span>首页</button>
     <button data-page="bills"><span class="ico">🧾</span>账单</button>
+    <button data-page="ledger"><span class="ico">✏️</span>记账</button>
     <button data-page="reps"><span class="ico">💳</span>还款</button>
     <button data-page="stats"><span class="ico">📊</span>分析</button>
     <button data-page="settings"><span class="ico">⚙️</span>设置</button>

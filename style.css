@@ -300,3 +300,55 @@ input[type=date]{-webkit-appearance:none;appearance:none}
 /* ---------- 账单页底部操作 ---------- */
 .bill-actions{display:flex;gap:8px;margin:2px 0 6px}
 .bill-actions .btn{flex:1}
+
+/* ---------- 记账 ---------- */
+.led-top{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:12px}
+.mon-btn{
+  width:34px;height:34px;border-radius:50%;border:1px solid var(--line);
+  background:var(--card);color:var(--text);font-size:19px;line-height:1;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
+}
+.mon-btn:active{background:var(--card2)}
+.mon-lab{font-size:16px;font-weight:700;min-width:130px;text-align:center}
+.led-add{margin-bottom:12px;font-size:16px;padding:13px}
+
+/* 支出 / 收入 切换 */
+.seg{display:flex;gap:0;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:3px;margin-bottom:14px}
+.seg button{
+  flex:1;border:0;background:none;color:var(--muted);font-family:inherit;
+  font-size:14.5px;font-weight:600;padding:9px 0;border-radius:8px;cursor:pointer;
+}
+.seg button.on{background:var(--card);color:var(--primary);box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.seg button.on[data-k="out"]{color:var(--danger)}
+
+/* 大号金额 */
+.led-amt-in{font-size:26px!important;font-weight:700;text-align:right;padding:14px 14px!important;letter-spacing:.5px}
+
+/* 分类按钮网格 */
+.cat-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.cat-btn{
+  border:1px solid var(--line);background:var(--card2);color:var(--text);
+  font-family:inherit;font-size:13.5px;padding:10px 4px;border-radius:10px;cursor:pointer;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.cat-btn.on{background:var(--primary);border-color:var(--primary);color:#fff;font-weight:700}
+
+/* 每日流水 */
+.led-day{padding:0;overflow:hidden}
+.led-dhead{
+  padding:9px 14px;background:var(--card2);border-bottom:1px solid var(--line);
+  font-size:12.5px;font-weight:700;color:var(--muted);
+}
+.led-item{
+  display:flex;align-items:center;gap:10px;padding:11px 14px;
+  border-bottom:1px solid var(--line);cursor:pointer;
+}
+.led-item:last-child{border-bottom:0}
+.led-item:active{background:var(--card2)}
+.led-ico{font-size:19px;flex:0 0 24px;text-align:center}
+.led-mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.led-cat{font-size:14.5px;font-weight:600}
+.led-note{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.led-amt{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.led-amt.out{color:var(--danger)}
+.led-amt.in{color:var(--ok)}

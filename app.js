@@ -9,7 +9,7 @@ var BASE = (CFG.SUPABASE_URL || '').replace(/\/+$/, '');
 var ANON = CFG.SUPABASE_ANON_KEY || '';
 var LS_KEY = 'ccm_session_v1';
 
-var S = { cards: [], bills: [], reps: [], fixed: [], frecs: [], page: 'home', billTab: 'card' };
+var S = { cards: [], bills: [], reps: [], fixed: [], frecs: [], ledger: [], lmonth: null, ledgerErr: null, page: 'home', billTab: 'card' };
 var SESSION = null;
 
 /* ============ 工具 ============ */
@@ -196,6 +196,14 @@ async function loadAll() {
   ]);
   S.cards = r[0] || []; S.bills = r[1] || []; S.reps = r[2] || [];
   S.fixed = r[3] || []; S.frecs = r[4] || [];
+
+  /* 记账表单独加载：万一还没建表，也不该把整个 App 拖垮 */
+  try {
+    S.ledger = (await sb('/rest/v1/ledger?select=*&order=entry_date.desc&limit=3000')) || [];
+    S.ledgerErr = null;
+  } catch (e) {
+    S.ledger = []; S.ledgerErr = (e && e.message) || '加载失败';
+  }
 }
 
 /* ============ 提醒计算 ============ */
@@ -907,10 +915,241 @@ function renderSettings() {
 }
 
 /* ============ 页面切换 ============ */
-var TITLES = { home: '首页', bills: '账单', reps: '还款', stats: '分析', settings: '设置' };
+/* ============ 记账（日常收支） ============
+ * 只记当场付出去的钱（微信 / 支付宝 / 现金）。
+ * 信用卡刷卡不记在这里 —— 那部分已经进「账单」页变成欠款了，
+ * 再记一遍会让月度总支出翻倍。
+ */
+var LEDGER_CATS = {
+  out: ['餐饮', '交通', '购物', '日用', '医疗', '教育', '人情', '娱乐', '居住', '其他'],
+  'in': ['工资', '奖金', '报销', '理财', '其他']
+};
+var CAT_ICON = {
+  '餐饮': '\ud83c\udf5c', '交通': '\ud83d\ude8c', '购物': '\ud83d\uded2', '日用': '\ud83e\uddf4', '医疗': '\ud83d\udc8a',
+  '教育': '\ud83d\udcda', '人情': '\ud83c\udf81', '娱乐': '\ud83c\udfae', '居住': '\ud83c\udfe0',
+  '工资': '\ud83d\udcb0', '奖金': '\ud83c\udfc6', '报销': '\ud83e\uddfe', '理财': '\ud83d\udcc8', '其他': '\ud83d\udccc'
+};
+function catIcon(c) { return CAT_ICON[c] || '\ud83d\udccc'; }
+function ledgerMonth() { return S.lmonth || periodOf(todayISO()); }
+function monthLabel(m) { return parseInt(m.slice(0, 4), 10) + ' 年 ' + parseInt(m.slice(5, 7), 10) + ' 月'; }
+
+/* 某个月的汇总：收入、支出、结余、分类排行、按天分组 */
+function ledgerSummary(m) {
+  var rows = S.ledger.filter(function (e) { return periodOf(e.entry_date) === m; });
+  var inc = 0, exp = 0, byCat = {}, byDay = {};
+  rows.forEach(function (e) {
+    var a = e.amount_cents || 0;
+    var cat = e.category || '其他';
+    var d = String(e.entry_date || '').slice(0, 10);
+    if (!byDay[d]) byDay[d] = { out: 0, 'in': 0, rows: [] };
+    if (e.kind === 'in') {
+      inc += a; byDay[d]['in'] += a;
+    } else {
+      exp += a; byDay[d].out += a;
+      byCat[cat] = (byCat[cat] || 0) + a;
+    }
+    byDay[d].rows.push(e);
+  });
+  var cats = Object.keys(byCat).map(function (k) {
+    return { name: k, cents: byCat[k], pct: exp > 0 ? byCat[k] / exp * 100 : 0 };
+  }).sort(function (a, b) { return b.cents - a.cents; });
+  return { rows: rows, inc: inc, exp: exp, net: inc - exp, cats: cats, byDay: byDay };
+}
+
+function dayLabel(d) {
+  var p = String(d).split('-');
+  if (p.length < 3) return d;
+  var mm = parseInt(p[1], 10), dd = parseInt(p[2], 10);
+  if (d === todayISO()) return '今天 ' + mm + ' 月 ' + dd + ' 日';
+  var y = new Date(); y.setDate(y.getDate() - 1);
+  if (d === iso(y)) return '昨天 ' + mm + ' 月 ' + dd + ' 日';
+  var wk = '日一二三四五六'.charAt(new Date(+p[0], +p[1] - 1, +p[2]).getDay());
+  return mm + ' 月 ' + dd + ' 日 周' + wk;
+}
+
+function renderLedger() {
+  var m = ledgerMonth();
+  var lab = $('#ledMonthLab');
+  if (lab) lab.textContent = monthLabel(m);
+
+  var tip = $('#ledTip');
+  if (tip) {
+    tip.innerHTML = S.ledgerErr
+      ? '<div class="alert warn"><div class="lbl">记账表还没建</div>' +
+        '<div class="small" style="margin-top:4px">去 Supabase 后台 SQL Editor 跑一次建表 SQL 就好，其他功能不受影响</div></div>'
+      : '';
+  }
+
+  var sm = ledgerSummary(m);
+  var kp = $('#ledKpi');
+  if (kp) {
+    kp.innerHTML = kpi('本月收入', '¥' + fmt(sm.inc)) +
+      kpi('本月支出', '¥' + fmt(sm.exp)) +
+      kpi('本月结余', (sm.net < 0 ? '-¥' + fmt(-sm.net) : '¥' + fmt(sm.net)));
+  }
+
+  /* 和上月对比 */
+  var cmp = $('#ledCompare');
+  if (cmp) {
+    var prev = ledgerSummary(shiftPeriod(m, -1));
+    var diff = sm.exp - prev.exp;
+    var line;
+    if (!prev.exp && !sm.exp) line = '这个月和上月都还没记支出';
+    else if (!prev.exp) line = '上月还没记账，这个月是第一个月';
+    else if (diff === 0) line = '和上月持平（上月 ¥' + fmt(prev.exp) + '）';
+    else {
+      var pct = Math.abs(diff / prev.exp * 100);
+      line = '本月支出比上月' + (diff > 0 ? '多' : '少') + ' ¥' + fmt(Math.abs(diff)) +
+        '（' + (diff > 0 ? '+' : '-') + pct.toFixed(0) + '%），上月 ¥' + fmt(prev.exp);
+    }
+    cmp.innerHTML = '<p class="card-title">和上月对比</p><div class="small">' + esc(line) + '</div>';
+  }
+
+  /* 分类排行 */
+  var cw = $('#ledCats');
+  if (cw) {
+    if (!sm.cats.length) {
+      cw.innerHTML = '<p class="card-title">支出分类</p><div class="empty" style="padding:14px 0">这个月还没记支出</div>';
+    } else {
+      cw.innerHTML = '<p class="card-title">支出分类</p>' + sm.cats.map(function (c) {
+        return '<div class="bar-row"><div class="lab"><span>' + catIcon(c.name) + ' ' + esc(c.name) + '</span>' +
+          '<span>¥' + fmt(c.cents) + ' · ' + c.pct.toFixed(0) + '%</span></div>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + Math.max(2, c.pct).toFixed(1) + '%"></div></div></div>';
+      }).join('');
+    }
+  }
+
+  /* 每日流水 */
+  var dw = $('#ledDays');
+  if (dw) {
+    var days = Object.keys(sm.byDay).sort().reverse();
+    if (!days.length) {
+      dw.innerHTML = '<div class="card"><div class="empty"><span class="ico">\u270f\ufe0f</span>' +
+        '这个月还没记账<br><span class="small">点上面「记一笔」开始</span></div></div>';
+    } else {
+      dw.innerHTML = days.map(function (d) {
+        var g = sm.byDay[d];
+        var head = dayLabel(d) + (g.out ? ' · 支出 ¥' + fmt(g.out) : '') + (g['in'] ? ' · 收入 ¥' + fmt(g['in']) : '');
+        var items = g.rows.slice().sort(function (a, b) {
+          return String(b.created_at || '').localeCompare(String(a.created_at || ''));
+        });
+        return '<div class="card led-day"><div class="led-dhead">' + esc(head) + '</div>' +
+          items.map(function (e) {
+            var isIn = e.kind === 'in';
+            return '<div class="led-item" data-ledger="' + esc(e.id) + '">' +
+              '<span class="led-ico">' + catIcon(e.category) + '</span>' +
+              '<span class="led-mid"><span class="led-cat">' + esc(e.category || '其他') + '</span>' +
+              (e.note ? '<span class="led-note">' + esc(e.note) + '</span>' : '') + '</span>' +
+              '<span class="led-amt ' + (isIn ? 'in' : 'out') + '">' + (isIn ? '+' : '-') + fmt(e.amount_cents) + '</span>' +
+              '</div>';
+          }).join('') + '</div>';
+      }).join('');
+    }
+  }
+}
+
+/* 录入 / 修改一笔 */
+function ledgerForm(e) {
+  e = e || {};
+  var st = {
+    kind: e.kind || 'out',
+    cat: e.category || '',
+    date: String(e.entry_date || todayISO()).slice(0, 10),
+    amt: e.amount_cents != null ? (e.amount_cents / 100).toFixed(2) : '',
+    note: e.note || ''
+  };
+  if (LEDGER_CATS[st.kind].indexOf(st.cat) < 0) st.cat = LEDGER_CATS[st.kind][0];
+
+  function paint() {
+    var root = $('#sheetRoot');
+    root.innerHTML = '<div class="sheet-mask" id="mask"><div class="sheet">' +
+      '<h3>' + (e.id ? '改一笔' : '记一笔') + '</h3>' +
+      '<div class="seg" id="ledKind">' +
+        '<button type="button" data-k="out" class="' + (st.kind === 'out' ? 'on' : '') + '">支出</button>' +
+        '<button type="button" data-k="in" class="' + (st.kind === 'in' ? 'on' : '') + '">收入</button>' +
+      '</div>' +
+      '<label class="field"><span>金额</span>' +
+        '<input id="ledAmt" type="number" step="0.01" inputmode="decimal" class="led-amt-in" value="' +
+        esc(st.amt) + '" placeholder="0.00"></label>' +
+      '<div class="field"><span>分类</span><div class="cat-grid" id="ledCatGrid">' +
+        LEDGER_CATS[st.kind].map(function (c) {
+          return '<button type="button" class="cat-btn' + (c === st.cat ? ' on' : '') + '" data-c="' + esc(c) + '">' +
+            catIcon(c) + ' ' + esc(c) + '</button>';
+        }).join('') + '</div></div>' +
+      '<label class="field"><span>日期</span><input id="ledDate" type="date" value="' + esc(st.date) + '"></label>' +
+      '<label class="field"><span>备注</span><input id="ledNote" type="text" value="' + esc(st.note) +
+        '" placeholder="可不填，比如「和同事吃面」"></label>' +
+      '<div class="btn-row" style="margin-top:10px">' +
+        (e.id ? '<button type="button" class="btn" id="ledDel" style="color:var(--danger)">删除</button>' : '') +
+        '<button type="button" class="btn" id="ledCancel">取消</button>' +
+        '<button type="button" class="btn primary" id="ledSave">保存</button>' +
+      '</div></div></div>';
+
+    $('#mask').onclick = function (ev) { if (ev.target.id === 'mask') closeSheet(); };
+    $('#ledCancel').onclick = closeSheet;
+
+    Array.prototype.forEach.call(root.querySelectorAll('#ledKind button'), function (b) {
+      b.onclick = function () {
+        st.kind = b.dataset.k;
+        if (LEDGER_CATS[st.kind].indexOf(st.cat) < 0) st.cat = LEDGER_CATS[st.kind][0];
+        paint();
+      };
+    });
+    /* 点分类只切换高亮，不重绘，避免金额输入框丢焦点 */
+    Array.prototype.forEach.call(root.querySelectorAll('.cat-btn'), function (b) {
+      b.onclick = function () {
+        st.cat = b.dataset.c;
+        Array.prototype.forEach.call(root.querySelectorAll('.cat-btn'), function (x) {
+          x.classList.toggle('on', x.dataset.c === st.cat);
+        });
+      };
+    });
+
+    var amtEl = $('#ledAmt');
+    amtEl.oninput = function () { st.amt = amtEl.value; };
+    $('#ledDate').onchange = function () { st.date = this.value; };
+    $('#ledNote').oninput = function () { st.note = this.value; };
+
+    $('#ledSave').onclick = async function () {
+      var cents = toCents(st.amt);
+      if (!cents) { toast('金额要大于 0'); return; }
+      var body = {
+        entry_date: st.date || todayISO(), kind: st.kind,
+        amount_cents: cents, category: st.cat, note: st.note || null
+      };
+      try {
+        if (e.id) await sb('/rest/v1/ledger?id=eq.' + e.id, { method: 'PATCH', body: body });
+        else await sb('/rest/v1/ledger', { method: 'POST', body: body });
+        S.lmonth = periodOf(body.entry_date);
+        await loadAll(); closeSheet(); render();
+        toast(e.id ? '改好了' : '已记下 ¥' + fmt(cents));
+      } catch (err) {
+        var msg = String((err && err.message) || '');
+        toast(/relation|does not exist|schema cache/i.test(msg)
+          ? '记账表还没建，先在 Supabase 跑建表 SQL'
+          : ('保存失败：' + msg));
+      }
+    };
+
+    if (e.id) {
+      $('#ledDel').onclick = async function () {
+        if (!confirm('删掉这笔？')) return;
+        try {
+          await sb('/rest/v1/ledger?id=eq.' + e.id, { method: 'DELETE' });
+          await loadAll(); closeSheet(); render(); toast('已删除');
+        } catch (err) { toast('删除失败：' + err.message); }
+      };
+    }
+
+    setTimeout(function () { try { amtEl.focus(); } catch (x) {} }, 120);
+  }
+  paint();
+}
+
+var TITLES = { home: '首页', bills: '账单', ledger: '记账', reps: '还款', stats: '分析', settings: '设置' };
 function showPage(p) {
   S.page = p;
-  ['home', 'bills', 'reps', 'stats', 'settings'].forEach(function (k) {
+  ['home', 'bills', 'ledger', 'reps', 'stats', 'settings'].forEach(function (k) {
     var el = document.getElementById('page-' + k);
     if (el) el.classList.toggle('hidden', k !== p);
   });
@@ -925,6 +1164,7 @@ function showPage(p) {
 function render() {
   if (S.page === 'home') renderHome();
   if (S.page === 'bills') renderBills();
+  if (S.page === 'ledger') renderLedger();
   if (S.page === 'reps') renderReps();
   if (S.page === 'stats') renderStats();
   if (S.page === 'settings') renderSettings();
@@ -1217,7 +1457,7 @@ function bind() {
   if (sGr) sGr.onclick = showGraceDetail;
 
   document.addEventListener('click', async function (e) {
-    var t = e.target.closest('[data-more],[data-main],[data-pay],[data-bill],[data-fixed],[data-fpay],[data-unpay],[data-delrep],[data-card],[data-feewaive]');
+    var t = e.target.closest('[data-more],[data-main],[data-pay],[data-bill],[data-fixed],[data-fpay],[data-unpay],[data-delrep],[data-card],[data-feewaive],[data-ledger]');
     if (!t) return;
     try {
       if (t.dataset.more) {
@@ -1249,6 +1489,9 @@ function bind() {
         await loadAll(); render();
       } else if (t.dataset.feewaive) {
         await setAnnualFeeWaived(t.dataset.feewaive, true);
+      } else if (t.dataset.ledger) {
+        var le = null; for (var w = 0; w < S.ledger.length; w++) if (S.ledger[w].id === t.dataset.ledger) le = S.ledger[w];
+        if (le) ledgerForm(le);
       } else if (t.dataset.card) {
         var c = null; for (var z = 0; z < S.cards.length; z++) if (S.cards[z].id === t.dataset.card) c = S.cards[z];
         if (c) cardForm(c);
@@ -1257,8 +1500,13 @@ function bind() {
   });
 
   // 导出 / 导入
+  var lp = $('#ledPrev'), ln = $('#ledNext'), la = $('#ledAdd');
+  if (lp) lp.onclick = function () { S.lmonth = shiftPeriod(ledgerMonth(), -1); render(); };
+  if (ln) ln.onclick = function () { S.lmonth = shiftPeriod(ledgerMonth(), 1); render(); };
+  if (la) la.onclick = function () { ledgerForm(); };
+
   $('#btnExport').onclick = function () {
-    var data = { version: 1, exported_at: new Date().toISOString(), cards: S.cards, bills: S.bills, repayments: S.reps, fixed_payments: S.fixed, fixed_records: S.frecs };
+    var data = { version: 2, exported_at: new Date().toISOString(), cards: S.cards, bills: S.bills, repayments: S.reps, fixed_payments: S.fixed, fixed_records: S.frecs, ledger: S.ledger };
     var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1310,6 +1558,10 @@ async function restore(d) {
   for (var m = 0; m < (d.repayments || []).length; m++) {
     var rp = d.repayments[m]; if (!mapCard[rp.card_id]) continue;
     await sb('/rest/v1/repayments', { method: 'POST', body: { card_id: mapCard[rp.card_id], bill_id: mapBill[rp.bill_id] || null, period: rp.period, amount_cents: rp.amount_cents, paid_at: rp.paid_at, method: rp.method, note: rp.note } });
+  }
+  for (var q = 0; q < (d.ledger || []).length; q++) {
+    var le = d.ledger[q];
+    await sb('/rest/v1/ledger', { method: 'POST', body: { entry_date: le.entry_date, kind: le.kind, amount_cents: le.amount_cents, category: le.category, note: le.note } });
   }
   for (var n = 0; n < (d.fixed_records || []).length; n++) {
     var fr = d.fixed_records[n]; if (!mapFixed[fr.fixed_payment_id]) continue;
